@@ -54,6 +54,11 @@ if __name__ == "__main__":
         help="whether to use unbounded rendering",
     )
     parser.add_argument("--cone_angle", type=float, default=0.0)
+
+    # add depth loss
+    parser.add_argument(
+        "--add_depth_loss", action="store_true", help="use depth to update"
+    )
     args = parser.parse_args()
 
     render_n_samples = 1024
@@ -97,12 +102,15 @@ if __name__ == "__main__":
         ],
         gamma=0.33,
     )
-    
+
+    # initialize logs
+    with open(logdir / "statistics.txt", "w") as f:
+        pass
+
     # load checkpoint
-    ckpt_path = "logs/model.ckpt"
-    ckpt = torch.load(ckpt_path)
-    # print(ckpt)
-    radiance_field.load_state_dict(ckpt)
+    # ckpt_path = "logs/model.ckpt"
+    # ckpt = torch.load(ckpt_path)
+    # radiance_field.load_state_dict(ckpt)
 
     # setup the dataset
     train_dataset_kwargs = {}
@@ -184,7 +192,16 @@ if __name__ == "__main__":
             alive_ray_mask = acc.squeeze(-1) > 0
 
             # compute loss
-            loss = F.smooth_l1_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
+            rgb_loss = F.smooth_l1_loss(
+                rgb[alive_ray_mask], pixels[alive_ray_mask]
+            )
+            loss = rgb_loss
+
+            if args.add_depth_loss:
+                depth_loss = F.smooth_l1_loss(
+                    depth[alive_ray_mask], data["depth"][alive_ray_mask]
+                )
+                loss += depth_loss
 
             optimizer.zero_grad()
             # do not unscale it because we are using Adam.
@@ -201,18 +218,21 @@ if __name__ == "__main__":
                     f"alive_ray_mask={alive_ray_mask.long().sum():d} | "
                     f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} |"
                 )
+                if args.add_depth_loss:
+                    reprs += f" rgb_loss={rgb_loss:.5f} | depth_loss={depth_loss:.5f} |"
                 print(reprs)
-                with open(logdir/"statistics.txt", "a") as f:
+                with open(logdir / "statistics.txt", "a") as f:
                     f.write(reprs + "\n")
 
             if step >= 0 and step % eval_steps == 0 and step > 0:
                 test_dir = logdir / f"test_{step:08d}"
                 test_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 # evaluation
                 radiance_field.eval()
 
                 psnrs = []
+                depth_errors = []
                 with torch.no_grad():
                     for i in tqdm.tqdm(range(len(test_dataset))):
                         data = test_dataset[i]
@@ -238,6 +258,8 @@ if __name__ == "__main__":
                         mse = F.mse_loss(rgb, pixels)
                         psnr = -10.0 * torch.log(mse) / np.log(10.0)
                         psnrs.append(psnr.item())
+                        depth_error = F.smooth_l1_loss(depth, data["depth"])
+                        depth_errors.append(depth_error.item())
                         imageio.imwrite(
                             test_dir / "acc_binary_test.png",
                             ((acc > 0).float().cpu().numpy() * 255).astype(
@@ -250,11 +272,14 @@ if __name__ == "__main__":
                         )
                         # break
                 psnr_avg = sum(psnrs) / len(psnrs)
-                print(f"evaluation: psnr_avg={psnr_avg}")
-                with open(logdir/"statistics.txt", "a") as f:
-                    f.write(f"evaluation: psnr_avg={psnr_avg} \n")
+                depth_error_avg = sum(depth_errors) / len(depth_errors)
+                reprs = f"evaluation: psnr_avg={psnr_avg} | depth_error_avg={depth_error_avg}"
+                print(reprs)
+                with open(logdir / "statistics.txt", "a") as f:
+                    f.write(reprs + "\n")
                 torch.save(
-                    radiance_field.state_dict(), test_dir / f"model-psnr-{psnr_avg}.ckpt",
+                    radiance_field.state_dict(),
+                    test_dir / f"model-psnr-{psnr_avg}.ckpt",
                 )
 
             if step == max_steps:

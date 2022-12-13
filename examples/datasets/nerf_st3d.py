@@ -46,7 +46,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         # self.training = (num_rays is not None) and (split in ["train"])
         self.batch_over_images = batch_over_images
         self.device = device
-        
+
         self._load_raw_data()
 
     def __len__(self):
@@ -70,15 +70,15 @@ class SubjectLoader(torch.utils.data.Dataset):
                 torch.from_numpy(self.rays_d[indices]), (self.H, self.W, 3)
             ).to(self.device)
             rgb = torch.reshape(
-                torch.from_numpy(self.rays_rgb[indices]),
-                (self.H, self.W, 3),
+                torch.from_numpy(self.rays_rgb[indices]), (self.H, self.W, 3),
+            ).to(self.device)
+            depth = torch.reshape(
+                torch.from_numpy(self.rays_depth[indices]), (self.H, self.W, 1),
             ).to(self.device)
         else:
             if self.batch_over_images:
                 indices = np.random.randint(
-                    0,
-                    self.rays_o.shape[0],
-                    size=(num_rays,),
+                    0, self.rays_o.shape[0], size=(num_rays,),
                 )
             else:
                 indices = np.random.randint(
@@ -96,12 +96,16 @@ class SubjectLoader(torch.utils.data.Dataset):
             rgb = torch.reshape(
                 torch.from_numpy(self.rays_rgb[indices]), (num_rays, 3)
             ).to(self.device)
+            depth = torch.reshape(
+                torch.from_numpy(self.rays_depth[indices]), (num_rays, 1)
+            ).to(self.device)
 
         rays = Rays(origins=origins, viewdirs=viewdirs)
         return {
             "pixels": rgb,  # [h, w, 3] or [num_rays, 3]
             "rays": rays,  # [h, w, 3] or [num_rays, 3]
-            "color_bkgd": torch.zeros(3, device=self.device)
+            "depth": depth,
+            "color_bkgd": torch.zeros(3, device=self.device),
         }
 
     def _load_raw_data(self):
@@ -160,9 +164,11 @@ class SubjectLoader(torch.utils.data.Dataset):
         # load training camera poses
         if self.split == "eval":
             origins = np.array([0.0, 0.0, 0.0]).reshape(1, 3)
-            self.rays_o = np.repeat(
-                origins.reshape(1, -1), H * W, axis=0
-            ).reshape(-1, 3).astype(np.float32)
+            self.rays_o = (
+                np.repeat(origins.reshape(1, -1), H * W, axis=0)
+                .reshape(-1, 3)
+                .astype(np.float32)
+            )
             self.rays_d = original_coord.reshape(-1, 3).astype(np.float32)
             self.rays_g = gradient.reshape(-1, 3).astype(np.float32)
             self.rays_rgb = rgb.reshape(-1, 3).astype(np.float32)
@@ -211,7 +217,11 @@ class SubjectLoader(torch.utils.data.Dataset):
             self.rays_d = np.concatenate(rays_d, axis=0).astype(np.float32)
             self.rays_g = np.concatenate(rays_g, axis=0).astype(np.float32)
             self.rays_rgb = np.concatenate(rays_rgb, axis=0).astype(np.float32)
-            self.rays_depth = np.concatenate(rays_depth, axis=0).astype(np.float32)
-            self.rays_indices = np.cumsum(rays_indices, dtype=int).astype(np.float32)
+            self.rays_depth = np.concatenate(rays_depth, axis=0).astype(
+                np.float32
+            )
+            self.rays_indices = np.cumsum(rays_indices, dtype=int).astype(
+                np.float32
+            )
         self.coord = coord
         self.H, self.W = H, W
