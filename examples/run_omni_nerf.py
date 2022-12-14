@@ -762,6 +762,7 @@ def train():
     training_log = os.path.join(basedir, expname, scene, "training_log.txt")
     # os.makedirs(training_log, exist_ok=True)
 
+    tic = time.time()
     for i in trange(start, N_iters):
         time0 = time.time()
 
@@ -921,12 +922,13 @@ def train():
             print("Saved test set")
 
         if i % args.i_print == 0:
+            elapsed_time = time.time() - tic
             tqdm.write(
-                f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}  Image Loss: {img_loss.item()}  Depth Loss: {depth_loss.item()}"
+                f"[TRAIN] elapsed_time={elapsed_time:.2f}s | Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}  Image Loss: {img_loss.item()}  Depth Loss: {depth_loss.item()}"
             )
             with open(training_log, "a") as f:
                 f.write(
-                    f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}  Image Loss: {img_loss.item()}  Depth Loss: {depth_loss.item()} \n"
+                    f"[TRAIN] elapsed_time={elapsed_time:.2f}s | Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}  Image Loss: {img_loss.item()}  Depth Loss: {depth_loss.item()} \n"
                 )
 
         global_step += 1

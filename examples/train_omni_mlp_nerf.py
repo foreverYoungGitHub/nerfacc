@@ -36,7 +36,9 @@ if __name__ == "__main__":
         "--scene",
         type=str,
         default="03122_554516",
-        choices=["03122_554516",],
+        choices=[
+            "03122_554516",
+        ],
         help="which scene to use",
     )
     parser.add_argument(
@@ -46,7 +48,9 @@ if __name__ == "__main__":
         help="delimited list input",
     )
     parser.add_argument(
-        "--test_chunk_size", type=int, default=8192,
+        "--test_chunk_size",
+        type=int,
+        default=8192,
     )
     parser.add_argument(
         "--unbounded",
@@ -57,7 +61,12 @@ if __name__ == "__main__":
 
     # add depth loss
     parser.add_argument(
-        "--add_depth_loss", action="store_true", help="use depth to update"
+        "--add_depth_loss", action="store_true", help="use depth for loss"
+    )
+    parser.add_argument(
+        "--add_depth_prior",
+        action="store_true",
+        help="use depth for occupy update",
     )
     args = parser.parse_args()
 
@@ -145,9 +154,28 @@ if __name__ == "__main__":
         resolution=grid_resolution,
         contraction_type=contraction_type,
     ).to(device)
+    occ_eval_fn = lambda x: radiance_field.query_opacity(x, render_step_size)
+
+    step = 0
+    # adding depth prior for occupancy_grid
+    if args.add_depth_prior:
+        depth_prior = torch.reshape(
+            torch.from_numpy(test_dataset.coord), (-1, 3)
+        ).to(self.device)
+
+        def depth_prior_occ_fn(x, warmup_steps=10_000):
+            min_dist = torch.cdist(x, depth_prior).min(axis=1)
+            depth_prior_occ = torch.exp(-2 * min_dist / render_step_size)
+            radiance_occ = radiance_field.query_opacity(x, render_step_size)
+            occ = torch.maximum(depth_prior_occ, radiance_occ)
+            if step < warmup_steps:
+                ratio = step / warmup_steps
+                return depth_prior_occ * (1 - ratio) + occ * ratio
+            return occ
+
+        occ_eval_fn = depth_prior_occ_fn
 
     # training
-    step = 0
     tic = time.time()
     for epoch in range(10000000):
         for i in range(len(train_dataset)):
@@ -161,9 +189,7 @@ if __name__ == "__main__":
             # update occupancy grid
             occupancy_grid.every_n_step(
                 step=step,
-                occ_eval_fn=lambda x: radiance_field.query_opacity(
-                    x, render_step_size
-                ),
+                occ_eval_fn=occ_eval_fn,
             )
 
             # render
