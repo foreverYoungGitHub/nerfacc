@@ -598,6 +598,12 @@ def config_parser():
 
     # logging/saving options
     parser.add_argument(
+        "--N_iters",
+        type=int,
+        default=100000,
+        help="frequency of console printout and metric loggin",
+    )
+    parser.add_argument(
         "--i_print",
         type=int,
         default=100,
@@ -745,7 +751,7 @@ def train():
         rays_g = torch.Tensor(rays_g).to(device)
 
     print("shuffle rays")
-    rand_idx = torch.randperm(rays_rgb.shape[0])
+    rand_idx = torch.randperm(rays_rgb.shape[0]).to(device)
     rays_o = rays_o[rand_idx]
     rays_d = rays_d[rand_idx]
     rays_rgb = rays_rgb[rand_idx]
@@ -756,7 +762,7 @@ def train():
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
     i_batch = 0
-    N_iters = 100000 + 1
+    N_iters = args.N_iters + 1
     start = start + 1
     print("Begin, iter: %d" % start)
     training_log = os.path.join(basedir, expname, scene, "training_log.txt")

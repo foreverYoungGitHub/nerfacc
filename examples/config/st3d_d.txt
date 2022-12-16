@@ -1,5 +1,5 @@
 # filtered out fake visible pixels
-expname = std3d_raw
+expname = std3d_depth
 dataset_type = st3d
 
 N_rand = 1400
@@ -14,7 +14,7 @@ multires_views = 4
 
 stage = 0
 use_gradient = False
-use_depth = False
+use_depth = True
 
 i_testset = 10000
 N_iters = 200000
