@@ -56,7 +56,7 @@ class OccupancyGridWithPrior(OccupancyGrid):
         # calculate depth diff & occ
         p_dist = point_cloud.norm(dim=-1)
         dist_diff = torch.abs(p_dist[i, j] - x_dist)
-        self.occs = torch.exp(-2 * dist_diff / radius)
+        self.occs = torch.exp(- dist_diff / (2*radius))
 
         # self.register_buffer("prior_occ", prior_occ)
         self._binary = (self.occs > occ_thre).view(self._binary.shape)
@@ -67,15 +67,16 @@ class OccupancyGridWithPrior(OccupancyGrid):
         step: int,
         occ_eval_fn: Callable,
         occ_thre: float = 0.01,
-        ema_decay: float = 0.99,
-        warmup_steps: int = 10_000,
+        ema_decay: float = 0.95,
+        warmup_steps: int = 256,
     ) -> None:
         """Update the occ field in the EMA way."""
         # sample cells
-        # if step < warmup_steps:
+        if step < warmup_steps: #freeze the self._binary for the warmup stage
+            return
         #     indices = self._get_all_cells()
         # else:
-        N = self.num_cells // 4
+        N = self.num_cells // (4 * 8) # add 8 for 256 
         indices = self._sample_uniform_and_occupied_cells(N)
 
         # infer occupancy: density * step_size
@@ -143,12 +144,12 @@ if __name__ == "__main__":
         ],
         help="which scene to use",
     )
-    parser.add_argument(
-        "--aabb",
-        type=lambda s: [float(item) for item in s.split(",")],
-        default="-1.,-1.,-1.,1.,1.,1.",
-        help="delimited list input",
-    )
+    # parser.add_argument(
+    #     "--aabb",
+    #     type=lambda s: [float(item) for item in s.split(",")],
+    #     default="-1.,-1.,-1.,1.,1.,1.",
+    #     help="delimited list input",
+    # )
     parser.add_argument(
         "--test_chunk_size",
         type=int,
@@ -172,30 +173,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    render_n_samples = 1024
-
     logdir = pathlib.Path("./logs/") / args.expname / args.scene
     logdir.mkdir(parents=True, exist_ok=True)
-
-    # setup the scene bounding box.
-    if args.unbounded:
-        print("Using unbounded rendering")
-        contraction_type = ContractionType.UN_BOUNDED_SPHERE
-        # contraction_type = ContractionType.UN_BOUNDED_TANH
-        scene_aabb = None
-        near_plane = 0.2
-        far_plane = 1e4
-        render_step_size = 1e-2
-    else:
-        contraction_type = ContractionType.AABB
-        scene_aabb = torch.tensor(args.aabb, dtype=torch.float32, device=device)
-        near_plane = None
-        far_plane = None
-        render_step_size = (
-            (scene_aabb[3:] - scene_aabb[:3]).max()
-            * math.sqrt(3)
-            / render_n_samples
-        ).item()
 
     # setup the radiance field we want to train.
     max_steps = 100000
@@ -231,7 +210,8 @@ if __name__ == "__main__":
 
     data_root_fp = str(pathlib.Path.home() / "data/st3d")
     target_sample_batch_size = 1 << 17
-    grid_resolution = 128
+    grid_resolution = 256
+    render_n_samples = 1024
 
     train_dataset = SubjectLoader(
         subject_id=args.scene,
@@ -251,10 +231,33 @@ if __name__ == "__main__":
         **test_dataset_kwargs,
     )
 
+
+    # setup the scene bounding box.
+    if args.unbounded:
+        print("Using unbounded rendering")
+        contraction_type = ContractionType.UN_BOUNDED_SPHERE
+        # contraction_type = ContractionType.UN_BOUNDED_TANH
+        scene_aabb = None
+        near_plane = 0.2
+        far_plane = 1e4
+        render_step_size = 1e-2
+    else:
+        contraction_type = ContractionType.AABB
+        coord = test_dataset.coord.reshape(-1,3)
+        aabb = (coord.min(axis=0)-0.1).tolist() + (coord.max(axis=0)+0.1).tolist()
+        scene_aabb = torch.tensor(aabb, dtype=torch.float32, device=device)
+        near_plane = None
+        far_plane = None
+        render_step_size = (
+            (scene_aabb[3:] - scene_aabb[:3]).max()
+            * math.sqrt(3)
+            / render_n_samples
+        ).item()
+
     # adding depth prior for occupancy_grid
     if args.add_depth_prior:
         occupancy_grid = OccupancyGridWithPrior(
-            roi_aabb=args.aabb,
+            roi_aabb=aabb,
             resolution=grid_resolution,
             contraction_type=contraction_type,
         ).to(device)
@@ -264,7 +267,7 @@ if __name__ == "__main__":
         )
     else:
         occupancy_grid = OccupancyGrid(
-            roi_aabb=args.aabb,
+            roi_aabb=aabb,
             resolution=grid_resolution,
             contraction_type=contraction_type,
         ).to(device)

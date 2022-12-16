@@ -43,7 +43,7 @@ class OccupancyGridWithPrior(OccupancyGrid):
         # calculate depth diff & occ
         p_dist = point_cloud.norm(dim=-1)
         dist_diff = torch.abs(p_dist[i, j] - x_dist)
-        prior_occ = torch.exp(-2 * dist_diff / radius)
+        prior_occ = torch.exp(- dist_diff / (2*radius))
         return (
             x.cpu().numpy(),
             prior_occ.cpu().numpy(),
@@ -72,6 +72,9 @@ resolution = 256
 print(2 / resolution)
 print(render_step_size)
 contraction_type = ContractionType.AABB
+reshape_coord = coord.reshape(-1,3)
+aabb = (reshape_coord.min(axis=0)-0.1).tolist() + (reshape_coord.max(axis=0)+0.1).tolist()
+
 occupancy_grid = OccupancyGridWithPrior(
     roi_aabb=[-1, -1, -1, 1, 1, 1],
     resolution=resolution,
