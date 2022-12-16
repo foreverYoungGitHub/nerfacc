@@ -7,6 +7,7 @@ import math
 import os
 import time
 import pathlib
+from typing import Callable
 
 import imageio
 import numpy as np
@@ -16,7 +17,108 @@ import tqdm
 from radiance_fields.mlp import VanillaNeRFRadianceField
 from utils import render_image, set_random_seed
 
-from nerfacc import ContractionType, OccupancyGrid
+from nerfacc import ContractionType, OccupancyGrid, contract_inv
+
+
+class OccupancyGridWithPrior(OccupancyGrid):
+    def update_prior_by_point_cloud(
+        self, point_cloud, radius, occ_thre: float = 0.01
+    ):
+
+        if isinstance(point_cloud, np.ndarray):
+            point_cloud = torch.from_numpy(test_dataset.coord)
+        point_cloud = point_cloud.to(self.grid_coords.device)
+
+        # infer occupancy: density * step_size
+        grid_coords = self.grid_coords
+        x = grid_coords / self.resolution
+
+        # voxel coordinates [0, 1]^3 -> world
+        x = contract_inv(
+            x,
+            roi=self._roi_aabb,
+            type=self._contraction_type,
+        )
+
+        # calculate x depth and norm
+        x_dist = x.norm(dim=-1)
+        x_norm = x / x_dist[:, None]
+
+        # find raw indices
+        _theta = torch.asin(x_norm[:, 1])
+        _phi = torch.acos(x_norm[:, 0] / torch.cos(_theta))
+        mask = x_norm[:, 2] > 0
+        _phi[mask] *= -1
+        H, W = point_cloud.shape[:2]
+        i = torch.round((-(_theta * 2 / torch.pi) + 1) * H / 2).long() % H
+        j = torch.round((0.5 - _phi / (2 * torch.pi)) * W).long() % W
+
+        # calculate depth diff & occ
+        p_dist = point_cloud.norm(dim=-1)
+        dist_diff = torch.abs(p_dist[i, j] - x_dist)
+        self.occs = torch.exp(-2 * dist_diff / radius)
+
+        # self.register_buffer("prior_occ", prior_occ)
+        self._binary = (self.occs > occ_thre).view(self._binary.shape)
+
+    @torch.no_grad()
+    def _update(
+        self,
+        step: int,
+        occ_eval_fn: Callable,
+        occ_thre: float = 0.01,
+        ema_decay: float = 0.99,
+        warmup_steps: int = 10_000,
+    ) -> None:
+        """Update the occ field in the EMA way."""
+        # sample cells
+        # if step < warmup_steps:
+        #     indices = self._get_all_cells()
+        # else:
+        N = self.num_cells // 4
+        indices = self._sample_uniform_and_occupied_cells(N)
+
+        # infer occupancy: density * step_size
+        grid_coords = self.grid_coords[indices]
+        x = (
+            grid_coords + torch.rand_like(grid_coords, dtype=torch.float32)
+        ) / self.resolution
+        if self._contraction_type == ContractionType.UN_BOUNDED_SPHERE:
+            # only the points inside the sphere are valid
+            mask = (x - 0.5).norm(dim=1) < 0.5
+            x = x[mask]
+            indices = indices[mask]
+        # voxel coordinates [0, 1]^3 -> world
+        x = contract_inv(
+            x,
+            roi=self._roi_aabb,
+            type=self._contraction_type,
+        )
+        occ = occ_eval_fn(x).squeeze(-1)
+
+        # ema update
+        # v0 change
+        # self.occs[indices] = torch.maximum(
+        #     self.prior_occ[indices],
+        #     torch.maximum(self.occs[indices] * ema_decay, occ),
+        # )
+        # if step < warmup_steps:
+        #     ratio = step / warmup_steps
+        #     self.occs[indices] = (
+        #         self.prior_occ[indices] * (1 - ratio)
+        #         + self.occs[indices] * ratio
+        #     )
+        self.occs[indices] = torch.maximum(self.occs[indices] * ema_decay, occ)
+        
+        # suppose to use scatter max but emperically it is almost the same.
+        # self.occs, _ = scatter_max(
+        #     occ, indices, dim=0, out=self.occs * ema_decay
+        # )
+        # TODO(yang): remove mean self.occs.mean()
+        self._binary = (
+            self.occs > torch.clamp(self.occs.mean(), max=occ_thre)
+        ).view(self._binary.shape)
+
 
 if __name__ == "__main__":
 
@@ -149,33 +251,26 @@ if __name__ == "__main__":
         **test_dataset_kwargs,
     )
 
-    occupancy_grid = OccupancyGrid(
-        roi_aabb=args.aabb,
-        resolution=grid_resolution,
-        contraction_type=contraction_type,
-    ).to(device)
-    occ_eval_fn = lambda x: radiance_field.query_opacity(x, render_step_size)
-
-    step = 0
     # adding depth prior for occupancy_grid
     if args.add_depth_prior:
-        depth_prior = torch.reshape(
-            torch.from_numpy(test_dataset.coord), (-1, 3)
-        ).to(self.device)
-
-        def depth_prior_occ_fn(x, warmup_steps=10_000):
-            min_dist = torch.cdist(x, depth_prior).min(axis=1)
-            depth_prior_occ = torch.exp(-2 * min_dist / render_step_size)
-            radiance_occ = radiance_field.query_opacity(x, render_step_size)
-            occ = torch.maximum(depth_prior_occ, radiance_occ)
-            if step < warmup_steps:
-                ratio = step / warmup_steps
-                return depth_prior_occ * (1 - ratio) + occ * ratio
-            return occ
-
-        occ_eval_fn = depth_prior_occ_fn
+        occupancy_grid = OccupancyGridWithPrior(
+            roi_aabb=args.aabb,
+            resolution=grid_resolution,
+            contraction_type=contraction_type,
+        ).to(device)
+        print("updating prior...")
+        occupancy_grid.update_prior_by_point_cloud(
+            test_dataset.coord, render_step_size
+        )
+    else:
+        occupancy_grid = OccupancyGrid(
+            roi_aabb=args.aabb,
+            resolution=grid_resolution,
+            contraction_type=contraction_type,
+        ).to(device)
 
     # training
+    step = 0
     tic = time.time()
     for epoch in range(10000000):
         for i in range(len(train_dataset)):
@@ -189,7 +284,9 @@ if __name__ == "__main__":
             # update occupancy grid
             occupancy_grid.every_n_step(
                 step=step,
-                occ_eval_fn=occ_eval_fn,
+                occ_eval_fn=lambda x: radiance_field.query_opacity(
+                    x, render_step_size
+                ),
             )
 
             # render

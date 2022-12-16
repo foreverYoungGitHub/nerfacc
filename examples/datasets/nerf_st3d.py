@@ -223,5 +223,6 @@ class SubjectLoader(torch.utils.data.Dataset):
             self.rays_indices = np.cumsum(rays_indices, dtype=int).astype(
                 np.float32
             )
-        self.coord = coord
+        self.rgb = rgb.astype(np.float32)
+        self.coord = coord.astype(np.float32)
         self.H, self.W = H, W
