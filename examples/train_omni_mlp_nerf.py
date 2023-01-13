@@ -58,8 +58,31 @@ class OccupancyGridWithPrior(OccupancyGrid):
         dist_diff = torch.abs(p_dist[i, j] - x_dist)
         self.occs = torch.exp(- dist_diff / (2*radius))
 
-        self.register_buffer("prior_occ", torch.exp(- dist_diff / (2*radius)))
+        # self.register_buffer("prior_occ", prior_occ)
         self._binary = (self.occs > occ_thre).view(self._binary.shape)
+        
+        self.register_buffer("_dilate", torch.ones([1,1,3,3,3], dtype=torch.half))
+        self._dilate = self._dilate.to(self._binary.device)
+
+    @torch.no_grad()
+    def _sample_occupied_growing_cells(self, n: int) -> torch.Tensor:
+        """Samples both n uniform and occupied cells."""
+        # print(self._binary.type())
+        # print(self._binary.unsqueeze(0).unsqueeze(0).he(torch.int8).type())
+        # print(self._dilate.type())
+        dilated_binary = torch.nn.functional.conv3d(
+                self._binary.unsqueeze(0).unsqueeze(0).half(), 
+                self._dilate, padding=(1, 1, 1)
+            ) > 0
+        occupied_indices = torch.nonzero(dilated_binary.flatten())[:, 0]
+        if n < len(occupied_indices):
+            selector = torch.randint(
+                len(occupied_indices), (n,), device=self.device
+            )
+            occupied_indices = occupied_indices[selector]
+        return occupied_indices
+        # indices = torch.cat([uniform_indices, occupied_indices], dim=0)
+        # return indices
 
     @torch.no_grad()
     def _update(
@@ -68,16 +91,17 @@ class OccupancyGridWithPrior(OccupancyGrid):
         occ_eval_fn: Callable,
         occ_thre: float = 0.01,
         ema_decay: float = 0.95,
-        warmup_steps: int = 10_000,
+        warmup_steps: int = 64, #10_000,
     ) -> None:
         """Update the occ field in the EMA way."""
         # sample cells
-        # if step < warmup_steps: #freeze the self._binary for the warmup stage
-        #     ema_decay = 0.999
+        if step < warmup_steps: #freeze the self._binary for the warmup stage
+            return
+            # ema_decay = 0.999
         #     indices = self._get_all_cells()
         # else:
         N = self.num_cells // (4 * 8) # add 8 for 256 
-        indices = self._sample_uniform_and_occupied_cells(N)
+        indices = self._sample_occupied_growing_cells(2*N)
 
         # infer occupancy: density * step_size
         grid_coords = self.grid_coords[indices]
@@ -103,23 +127,22 @@ class OccupancyGridWithPrior(OccupancyGrid):
         #     self.prior_occ[indices],
         #     torch.maximum(self.occs[indices] * ema_decay, occ),
         # )
+        # if step < warmup_steps:
+        #     ratio = step / warmup_steps
+        #     self.occs[indices] = (
+        #         self.prior_occ[indices] * (1 - ratio)
+        #         + self.occs[indices] * ratio
+        #     )
         self.occs[indices] = torch.maximum(self.occs[indices] * ema_decay, occ)
-        if step < warmup_steps:
-            ratio = step / warmup_steps
-            self.occs[indices] = (
-                self.prior_occ[indices] * (1 - ratio)
-                + self.occs[indices] * ratio
-            )
         
         # suppose to use scatter max but emperically it is almost the same.
         # self.occs, _ = scatter_max(
         #     occ, indices, dim=0, out=self.occs * ema_decay
         # )
-        # TODO(yang): remove mean self.occs.mean(n)
+        # TODO(yang): remove mean self.occs.mean()
         # print(self.occs.mean())
         self._binary = (
-            # self.occs > torch.clamp(self.occs.mean(), max=occ_thre)
-            self.occs > torch.clamp(torch.quantile(self.occs, 0.9), max=occ_thre)
+            self.occs > torch.clamp(self.occs.mean(), max=occ_thre)
         ).view(self._binary.shape)
 
 
@@ -292,6 +315,7 @@ if __name__ == "__main__":
                 occ_eval_fn=lambda x: radiance_field.query_opacity(
                     x, render_step_size
                 ),
+                warmup_steps=256,
             )
 
             # render
