@@ -58,7 +58,7 @@ class OccupancyGridWithPrior(OccupancyGrid):
         dist_diff = torch.abs(p_dist[i, j] - x_dist)
         self.occs = torch.exp(- dist_diff / (2*radius))
 
-        # self.register_buffer("prior_occ", prior_occ)
+        self.register_buffer("prior_occ", torch.exp(- dist_diff / (2*radius)))
         self._binary = (self.occs > occ_thre).view(self._binary.shape)
 
     @torch.no_grad()
@@ -68,12 +68,12 @@ class OccupancyGridWithPrior(OccupancyGrid):
         occ_eval_fn: Callable,
         occ_thre: float = 0.01,
         ema_decay: float = 0.95,
-        warmup_steps: int = 256,
+        warmup_steps: int = 10_000,
     ) -> None:
         """Update the occ field in the EMA way."""
         # sample cells
-        if step < warmup_steps: #freeze the self._binary for the warmup stage
-            return
+        # if step < warmup_steps: #freeze the self._binary for the warmup stage
+        #     ema_decay = 0.999
         #     indices = self._get_all_cells()
         # else:
         N = self.num_cells // (4 * 8) # add 8 for 256 
@@ -103,21 +103,23 @@ class OccupancyGridWithPrior(OccupancyGrid):
         #     self.prior_occ[indices],
         #     torch.maximum(self.occs[indices] * ema_decay, occ),
         # )
-        # if step < warmup_steps:
-        #     ratio = step / warmup_steps
-        #     self.occs[indices] = (
-        #         self.prior_occ[indices] * (1 - ratio)
-        #         + self.occs[indices] * ratio
-        #     )
         self.occs[indices] = torch.maximum(self.occs[indices] * ema_decay, occ)
+        if step < warmup_steps:
+            ratio = step / warmup_steps
+            self.occs[indices] = (
+                self.prior_occ[indices] * (1 - ratio)
+                + self.occs[indices] * ratio
+            )
         
         # suppose to use scatter max but emperically it is almost the same.
         # self.occs, _ = scatter_max(
         #     occ, indices, dim=0, out=self.occs * ema_decay
         # )
-        # TODO(yang): remove mean self.occs.mean()
+        # TODO(yang): remove mean self.occs.mean(n)
+        # print(self.occs.mean())
         self._binary = (
-            self.occs > torch.clamp(self.occs.mean(), max=occ_thre)
+            # self.occs > torch.clamp(self.occs.mean(), max=occ_thre)
+            self.occs > torch.clamp(torch.quantile(self.occs, 0.9), max=occ_thre)
         ).view(self._binary.shape)
 
 
