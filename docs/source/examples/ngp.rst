@@ -15,7 +15,7 @@ evaluation. All experiments are conducted on a single NVIDIA TITAN RTX GPU. The 
 memory footprint is about 3GB.
 
 .. note::
-    
+
     The Instant-NGP paper makes use of the alpha channel in the images to apply random background
     augmentation during training. For fair comparision, we rerun their code with a constant white
     background during both training and testing. Also it is worth to mention that we didn't strictly

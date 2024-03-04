@@ -59,11 +59,13 @@ inline __device__ __host__ float distance_to_next_voxel(
 inline __device__ __host__ float advance_to_next_voxel(
     const float t, const float dt_min,
     const float3 xyz, const float3 dir, const float3 inv_dir,
-    const float3 roi_min, const float3 roi_max, const int3 grid_res)
+    const float3 roi_min, const float3 roi_max, const int3 grid_res, const float far)
 {
     // Regular stepping (may be slower but matches non-empty space)
     float t_target = t + distance_to_next_voxel(
                              xyz, dir, inv_dir, roi_min, roi_max, grid_res);
+    
+    t_target = min(t_target, far);
     float _t = t;
     do
     {
@@ -95,7 +97,7 @@ __global__ void ray_marching_kernel(
     // first round outputs
     int *num_steps,
     // second round outputs
-    long *ray_indices,
+    int64_t *ray_indices,
     float *t_starts,
     float *t_ends)
 {
@@ -166,7 +168,7 @@ __global__ void ray_marching_kernel(
             case ContractionType::AABB:
                 // no contraction
                 t_mid = advance_to_next_voxel(
-                    t_mid, dt_min, xyz, dir, inv_dir, roi_min, roi_max, grid_res);
+                    t_mid, dt_min, xyz, dir, inv_dir, roi_min, roi_max, grid_res, far);
                 dt = calc_dt(t_mid, cone_angle, dt_min, dt_max);
                 t0 = t_mid - dt * 0.5f;
                 t1 = t_mid + dt * 0.5f;
@@ -279,7 +281,7 @@ std::vector<torch::Tensor> ray_marching(
         packed_info.data_ptr<int>(),
         // outputs
         nullptr, /* num_steps */
-        ray_indices.data_ptr<long>(),
+        ray_indices.data_ptr<int64_t>(),
         t_starts.data_ptr<float>(),
         t_ends.data_ptr<float>());
 

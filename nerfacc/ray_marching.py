@@ -58,7 +58,7 @@ def ray_marching(
         grid: Optional. Grid that idicates where to skip during marching.
             See :class:`nerfacc.Grid` for details.
         sigma_fn: Optional. If provided, the marching will skip the invisible space
-            by evaluating the density along the ray with `sigma_fn`. It should be a 
+            by evaluating the density along the ray with `sigma_fn`. It should be a
             function that takes in samples {t_starts (N, 1), t_ends (N, 1),
             ray indices (N,)} and returns the post-activation density values (N, 1).
             You should only provide either `sigma_fn` or `alpha_fn`.
@@ -208,6 +208,7 @@ def ray_marching(
         masks = render_visibility(
             alphas,
             ray_indices=ray_indices,
+            packed_info=packed_info,
             early_stop_eps=early_stop_eps,
             alpha_thre=alpha_thre,
             n_rays=rays_o.shape[0],
