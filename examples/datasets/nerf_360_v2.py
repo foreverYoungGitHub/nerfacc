@@ -173,9 +173,7 @@ def similarity_from_cameras(c2w, strict_scaling):
     else:
         # In the unlikely case the original data has y+ up axis,
         # rotate 180-deg about x axis
-        R_align = np.array(
-            [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-        )
+        R_align = np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
 
     #  R_align = np.eye(3) # DEBUG
     R = R_align @ R
@@ -264,6 +262,8 @@ class SubjectLoader(torch.utils.data.Dataset):
         )
         self.K = torch.tensor(self.K).to(torch.float32).to(device)
         self.height, self.width = self.images.shape[1:3]
+        self.g = torch.Generator(device=device)
+        self.g.manual_seed(42)
 
     def __len__(self):
         return len(self.images)
@@ -280,7 +280,9 @@ class SubjectLoader(torch.utils.data.Dataset):
 
         if self.training:
             if self.color_bkgd_aug == "random":
-                color_bkgd = torch.rand(3, device=self.images.device)
+                color_bkgd = torch.rand(
+                    3, device=self.images.device, generator=self.g
+                )
             elif self.color_bkgd_aug == "white":
                 color_bkgd = torch.ones(3, device=self.images.device)
             elif self.color_bkgd_aug == "black":
@@ -310,14 +312,23 @@ class SubjectLoader(torch.utils.data.Dataset):
                     len(self.images),
                     size=(num_rays,),
                     device=self.images.device,
+                    generator=self.g,
                 )
             else:
-                image_id = [index]
+                image_id = [index] * num_rays
             x = torch.randint(
-                0, self.width, size=(num_rays,), device=self.images.device
+                0,
+                self.width,
+                size=(num_rays,),
+                device=self.images.device,
+                generator=self.g,
             )
             y = torch.randint(
-                0, self.height, size=(num_rays,), device=self.images.device
+                0,
+                self.height,
+                size=(num_rays,),
+                device=self.images.device,
+                generator=self.g,
             )
         else:
             image_id = [index]

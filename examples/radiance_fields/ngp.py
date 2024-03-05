@@ -85,6 +85,13 @@ class NGPRadianceField(torch.nn.Module):
         super().__init__()
         if not isinstance(aabb, torch.Tensor):
             aabb = torch.tensor(aabb, dtype=torch.float32)
+
+        # Turns out rectangle aabb will leads to uneven collision so bad performance.
+        # We enforce a cube aabb here.
+        center = (aabb[..., :num_dim] + aabb[..., num_dim:]) / 2.0
+        size = (aabb[..., num_dim:] - aabb[..., :num_dim]).max()
+        aabb = torch.cat([center - size / 2.0, center + size / 2.0], dim=-1)
+
         self.register_buffer("aabb", aabb)
         self.num_dim = num_dim
         self.use_viewdirs = use_viewdirs
@@ -148,7 +155,7 @@ class NGPRadianceField(torch.nn.Module):
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
-                    "output_activation": "Sigmoid",
+                    "output_activation": "None",
                     "n_neurons": 64,
                     "n_hidden_layers": 2,
                 },
@@ -178,19 +185,21 @@ class NGPRadianceField(torch.nn.Module):
         else:
             return density
 
-    def _query_rgb(self, dir, embedding):
+    def _query_rgb(self, dir, embedding, apply_act: bool = True):
         # tcnn requires directions in the range [0, 1]
         if self.use_viewdirs:
             dir = (dir + 1.0) / 2.0
-            d = self.direction_encoding(dir.view(-1, dir.shape[-1]))
-            h = torch.cat([d, embedding.view(-1, self.geo_feat_dim)], dim=-1)
+            d = self.direction_encoding(dir.reshape(-1, dir.shape[-1]))
+            h = torch.cat([d, embedding.reshape(-1, self.geo_feat_dim)], dim=-1)
         else:
-            h = embedding.view(-1, self.geo_feat_dim)
+            h = embedding.reshape(-1, self.geo_feat_dim)
         rgb = (
             self.mlp_head(h)
-            .view(list(embedding.shape[:-1]) + [3])
+            .reshape(list(embedding.shape[:-1]) + [3])
             .to(embedding)
         )
+        if apply_act:
+            rgb = torch.sigmoid(rgb)
         return rgb
 
     def forward(

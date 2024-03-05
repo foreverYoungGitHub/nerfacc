@@ -119,7 +119,11 @@ venv.bak/
 # vscode
 .vsocde
 
-benchmarks/
 outputs/
-logs/
-log.txt
+data
+
+benchmarks/*
+!benchmarks/barf
+!benchmarks/kplanes
+!benchmarks/tensorf
+!benchmarks/tineuvox

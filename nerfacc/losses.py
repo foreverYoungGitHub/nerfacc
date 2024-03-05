@@ -1,32 +1,41 @@
 from torch import Tensor
 
-from .pack import unpack_data
+from .scan import exclusive_sum
+from .volrend import accumulate_along_rays
 
 
 def distortion(
-    packed_info: Tensor, weights: Tensor, t_starts: Tensor, t_ends: Tensor
+    weights: Tensor,
+    t_starts: Tensor,
+    t_ends: Tensor,
+    ray_indices: Tensor,
+    n_rays: int,
 ) -> Tensor:
-    """Distortion loss from Mip-NeRF 360 paper, Equ. 15.
+    """Distortion Regularization proposed in Mip-NeRF 360.
 
     Args:
-        packed_info: Packed info for the samples. (n_rays, 2)
-        weights: Weights for the samples. (all_samples,)
-        t_starts: Per-sample start distance. Tensor with shape (all_samples, 1).
-        t_ends: Per-sample end distance. Tensor with shape (all_samples, 1).
+        weights: The flattened weights of the samples. Shape (n_samples,)
+        t_starts: The start points of the samples. Shape (n_samples,)
+        t_ends: The end points of the samples. Shape (n_samples,)
+        ray_indices: The ray indices of the samples. LongTensor with shape (n_samples,)
+        n_rays: The total number of rays.
 
     Returns:
-        Distortion loss. (n_rays,)
+        The per-ray distortion loss with the shape (n_rays, 1).
     """
-    # （all_samples, 1) -> (n_rays, n_samples)
-    w = unpack_data(packed_info, weights[..., None]).squeeze(-1)
-    t1 = unpack_data(packed_info, t_starts).squeeze(-1)
-    t2 = unpack_data(packed_info, t_ends).squeeze(-1)
-
-    interval = t2 - t1
-    tmid = (t1 + t2) / 2
-
-    loss_uni = (1 / 3) * (interval * w.pow(2)).sum(-1)
-    ww = w.unsqueeze(-1) * w.unsqueeze(-2)
-    mm = (tmid.unsqueeze(-1) - tmid.unsqueeze(-2)).abs()
-    loss_bi = (ww * mm).sum((-1, -2))
-    return loss_uni + loss_bi
+    assert (
+        weights.shape == t_starts.shape == t_ends.shape == ray_indices.shape
+    ), (
+        f"the shape of the inputs are not the same: "
+        f"weights {weights.shape}, t_starts {t_starts.shape}, "
+        f"t_ends {t_ends.shape}, ray_indices {ray_indices.shape}"
+    )
+    t_mids = 0.5 * (t_starts + t_ends)
+    t_deltas = t_ends - t_starts
+    loss_uni = (1 / 3) * (t_deltas * weights.pow(2))
+    loss_bi_0 = weights * t_mids * exclusive_sum(weights, indices=ray_indices)
+    loss_bi_1 = weights * exclusive_sum(weights * t_mids, indices=ray_indices)
+    loss_bi = 2 * (loss_bi_0 - loss_bi_1)
+    loss = loss_uni + loss_bi
+    loss = accumulate_along_rays(loss, None, ray_indices, n_rays)
+    return loss
