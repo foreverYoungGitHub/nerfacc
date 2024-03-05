@@ -18,7 +18,7 @@ class SubjectLoader(torch.utils.data.Dataset):
 
     SPLITS = ["train", "test", "eval"]
     SUBJECT_IDS = [
-        "03122_554516",
+        "492165",
     ]
 
     # WIDTH, HEIGHT = 1024, 512
@@ -115,7 +115,8 @@ class SubjectLoader(torch.utils.data.Dataset):
         basename = baseDir.split("/")[-1] + "_"
         rgb = (
             np.asarray(
-                Image.open(os.path.join(baseDir, basename + "rgb.png")).convert(
+                # Image.open(os.path.join(baseDir, basename + "rgb.png")).convert(
+                Image.open(os.path.join(baseDir, "rgb_rawlight.png")).convert(
                     "RGB"
                 )
             )
@@ -133,7 +134,7 @@ class SubjectLoader(torch.utils.data.Dataset):
 
         else:
             d = np.asarray(
-                Image.open(os.path.join(baseDir, basename + "d.png"))
+                Image.open(os.path.join(baseDir, "depth.png")) #basename + "d.png"))
             )
 
         # resize rgb image to depth size

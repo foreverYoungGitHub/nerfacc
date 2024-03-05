@@ -15,135 +15,136 @@ import torch
 import torch.nn.functional as F
 import tqdm
 from radiance_fields.mlp import VanillaNeRFRadianceField
-from utils import render_image, set_random_seed
+from utils import render_image_with_occgrid, set_random_seed
 
-from nerfacc import ContractionType, OccupancyGrid, contract_inv
+from nerfacc import OccGridEstimator
+# ContractionType, OccupancyGrid, contract_inv
 
 
-class OccupancyGridWithPrior(OccupancyGrid):
-    def update_prior_by_point_cloud(
-        self, point_cloud, radius, occ_thre: float = 0.01
-    ):
+# class OccGridEstimatorWithPrior(OccGridEstimator):
+#     def update_prior_by_point_cloud(
+#         self, point_cloud, radius, occ_thre: float = 0.01
+#     ):
 
-        if isinstance(point_cloud, np.ndarray):
-            point_cloud = torch.from_numpy(test_dataset.coord)
-        point_cloud = point_cloud.to(self.grid_coords.device)
+#         if isinstance(point_cloud, np.ndarray):
+#             point_cloud = torch.from_numpy(test_dataset.coord)
+#         point_cloud = point_cloud.to(self.grid_coords.device)
 
-        # infer occupancy: density * step_size
-        grid_coords = self.grid_coords
-        x = grid_coords / self.resolution
+#         # infer occupancy: density * step_size
+#         grid_coords = self.grid_coords
+#         x = grid_coords / self.resolution
 
-        # voxel coordinates [0, 1]^3 -> world
-        x = contract_inv(
-            x,
-            roi=self._roi_aabb,
-            type=self._contraction_type,
-        )
+#         # voxel coordinates [0, 1]^3 -> world
+#         x = contract_inv(
+#             x,
+#             roi=self._roi_aabb,
+#             type=self._contraction_type,
+#         )
 
-        # calculate x depth and norm
-        x_dist = x.norm(dim=-1)
-        x_norm = x / x_dist[:, None]
+#         # calculate x depth and norm
+#         x_dist = x.norm(dim=-1)
+#         x_norm = x / x_dist[:, None]
 
-        # find raw indices
-        _theta = torch.asin(x_norm[:, 1])
-        _phi = torch.acos(x_norm[:, 0] / torch.cos(_theta))
-        mask = x_norm[:, 2] > 0
-        _phi[mask] *= -1
-        H, W = point_cloud.shape[:2]
-        i = torch.round((-(_theta * 2 / torch.pi) + 1) * H / 2).long() % H
-        j = torch.round((0.5 - _phi / (2 * torch.pi)) * W).long() % W
+#         # find raw indices
+#         _theta = torch.asin(x_norm[:, 1])
+#         _phi = torch.acos(x_norm[:, 0] / torch.cos(_theta))
+#         mask = x_norm[:, 2] > 0
+#         _phi[mask] *= -1
+#         H, W = point_cloud.shape[:2]
+#         i = torch.round((-(_theta * 2 / torch.pi) + 1) * H / 2).long() % H
+#         j = torch.round((0.5 - _phi / (2 * torch.pi)) * W).long() % W
 
-        # calculate depth diff & occ
-        p_dist = point_cloud.norm(dim=-1)
-        dist_diff = torch.abs(p_dist[i, j] - x_dist)
-        self.occs = torch.exp(- dist_diff / (2*radius))
+#         # calculate depth diff & occ
+#         p_dist = point_cloud.norm(dim=-1)
+#         dist_diff = torch.abs(p_dist[i, j] - x_dist)
+#         self.occs = torch.exp(- dist_diff / (2*radius))
 
-        # self.register_buffer("prior_occ", prior_occ)
-        self._binary = (self.occs > occ_thre).view(self._binary.shape)
+#         # self.register_buffer("prior_occ", prior_occ)
+#         self._binary = (self.occs > occ_thre).view(self._binary.shape)
         
-        self.register_buffer("_dilate", torch.ones([1,1,3,3,3], dtype=torch.half))
-        self._dilate = self._dilate.to(self._binary.device)
+#         self.register_buffer("_dilate", torch.ones([1,1,3,3,3], dtype=torch.half))
+#         self._dilate = self._dilate.to(self._binary.device)
 
-    @torch.no_grad()
-    def _sample_occupied_growing_cells(self, n: int) -> torch.Tensor:
-        """Samples both n uniform and occupied cells."""
-        # print(self._binary.type())
-        # print(self._binary.unsqueeze(0).unsqueeze(0).he(torch.int8).type())
-        # print(self._dilate.type())
-        dilated_binary = torch.nn.functional.conv3d(
-                self._binary.unsqueeze(0).unsqueeze(0).half(), 
-                self._dilate, padding=(1, 1, 1)
-            ) > 0
-        occupied_indices = torch.nonzero(dilated_binary.flatten())[:, 0]
-        if n < len(occupied_indices):
-            selector = torch.randint(
-                len(occupied_indices), (n,), device=self.device
-            )
-            occupied_indices = occupied_indices[selector]
-        return occupied_indices
-        # indices = torch.cat([uniform_indices, occupied_indices], dim=0)
-        # return indices
+#     @torch.no_grad()
+#     def _sample_occupied_growing_cells(self, n: int) -> torch.Tensor:
+#         """Samples both n uniform and occupied cells."""
+#         # print(self._binary.type())
+#         # print(self._binary.unsqueeze(0).unsqueeze(0).he(torch.int8).type())
+#         # print(self._dilate.type())
+#         dilated_binary = torch.nn.functional.conv3d(
+#                 self._binary.unsqueeze(0).unsqueeze(0).half(), 
+#                 self._dilate, padding=(1, 1, 1)
+#             ) > 0
+#         occupied_indices = torch.nonzero(dilated_binary.flatten())[:, 0]
+#         if n < len(occupied_indices):
+#             selector = torch.randint(
+#                 len(occupied_indices), (n,), device=self.device
+#             )
+#             occupied_indices = occupied_indices[selector]
+#         return occupied_indices
+#         # indices = torch.cat([uniform_indices, occupied_indices], dim=0)
+#         # return indices
 
-    @torch.no_grad()
-    def _update(
-        self,
-        step: int,
-        occ_eval_fn: Callable,
-        occ_thre: float = 0.01,
-        ema_decay: float = 0.95,
-        warmup_steps: int = 64, #10_000,
-    ) -> None:
-        """Update the occ field in the EMA way."""
-        # sample cells
-        if step < warmup_steps: #freeze the self._binary for the warmup stage
-            return
-            # ema_decay = 0.999
-        #     indices = self._get_all_cells()
-        # else:
-        N = self.num_cells // (4 * 8) # add 8 for 256 
-        indices = self._sample_occupied_growing_cells(2*N)
+#     @torch.no_grad()
+#     def _update(
+#         self,
+#         step: int,
+#         occ_eval_fn: Callable,
+#         occ_thre: float = 0.01,
+#         ema_decay: float = 0.95,
+#         warmup_steps: int = 64, #10_000,
+#     ) -> None:
+#         """Update the occ field in the EMA way."""
+#         # sample cells
+#         if step < warmup_steps: #freeze the self._binary for the warmup stage
+#             return
+#             # ema_decay = 0.999
+#         #     indices = self._get_all_cells()
+#         # else:
+#         N = self.num_cells // (4 * 8) # add 8 for 256 
+#         indices = self._sample_occupied_growing_cells(2*N)
 
-        # infer occupancy: density * step_size
-        grid_coords = self.grid_coords[indices]
-        x = (
-            grid_coords + torch.rand_like(grid_coords, dtype=torch.float32)
-        ) / self.resolution
-        if self._contraction_type == ContractionType.UN_BOUNDED_SPHERE:
-            # only the points inside the sphere are valid
-            mask = (x - 0.5).norm(dim=1) < 0.5
-            x = x[mask]
-            indices = indices[mask]
-        # voxel coordinates [0, 1]^3 -> world
-        x = contract_inv(
-            x,
-            roi=self._roi_aabb,
-            type=self._contraction_type,
-        )
-        occ = occ_eval_fn(x).squeeze(-1)
+#         # infer occupancy: density * step_size
+#         grid_coords = self.grid_coords[indices]
+#         x = (
+#             grid_coords + torch.rand_like(grid_coords, dtype=torch.float32)
+#         ) / self.resolution
+#         if self._contraction_type == ContractionType.UN_BOUNDED_SPHERE:
+#             # only the points inside the sphere are valid
+#             mask = (x - 0.5).norm(dim=1) < 0.5
+#             x = x[mask]
+#             indices = indices[mask]
+#         # voxel coordinates [0, 1]^3 -> world
+#         x = contract_inv(
+#             x,
+#             roi=self._roi_aabb,
+#             type=self._contraction_type,
+#         )
+#         occ = occ_eval_fn(x).squeeze(-1)
 
-        # ema update
-        # v0 change
-        # self.occs[indices] = torch.maximum(
-        #     self.prior_occ[indices],
-        #     torch.maximum(self.occs[indices] * ema_decay, occ),
-        # )
-        # if step < warmup_steps:
-        #     ratio = step / warmup_steps
-        #     self.occs[indices] = (
-        #         self.prior_occ[indices] * (1 - ratio)
-        #         + self.occs[indices] * ratio
-        #     )
-        self.occs[indices] = torch.maximum(self.occs[indices] * ema_decay, occ)
+#         # ema update
+#         # v0 change
+#         # self.occs[indices] = torch.maximum(
+#         #     self.prior_occ[indices],
+#         #     torch.maximum(self.occs[indices] * ema_decay, occ),
+#         # )
+#         # if step < warmup_steps:
+#         #     ratio = step / warmup_steps
+#         #     self.occs[indices] = (
+#         #         self.prior_occ[indices] * (1 - ratio)
+#         #         + self.occs[indices] * ratio
+#         #     )
+#         self.occs[indices] = torch.maximum(self.occs[indices] * ema_decay, occ)
         
-        # suppose to use scatter max but emperically it is almost the same.
-        # self.occs, _ = scatter_max(
-        #     occ, indices, dim=0, out=self.occs * ema_decay
-        # )
-        # TODO(yang): remove mean self.occs.mean()
-        # print(self.occs.mean())
-        self._binary = (
-            self.occs > torch.clamp(self.occs.mean(), max=occ_thre)
-        ).view(self._binary.shape)
+#         # suppose to use scatter max but emperically it is almost the same.
+#         # self.occs, _ = scatter_max(
+#         #     occ, indices, dim=0, out=self.occs * ema_decay
+#         # )
+#         # TODO(yang): remove mean self.occs.mean()
+#         # print(self.occs.mean())
+#         self._binary = (
+#             self.occs > torch.clamp(self.occs.mean(), max=occ_thre)
+#         ).view(self._binary.shape)
 
 
 if __name__ == "__main__":
@@ -163,9 +164,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scene",
         type=str,
-        default="03122_554516",
+        default="492165",
         choices=[
-            "03122_554516",
+            "492165",
         ],
         help="which scene to use",
     )
@@ -204,7 +205,7 @@ if __name__ == "__main__":
     # setup the radiance field we want to train.
     max_steps = 100000
     eval_steps = 10000
-    grad_scaler = torch.cuda.amp.GradScaler(1)
+    grad_scaler = torch.cuda.amp.GradScaler(2**10)
     radiance_field = VanillaNeRFRadianceField().to(device)
     optimizer = torch.optim.Adam(radiance_field.parameters(), lr=5e-4)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
@@ -233,9 +234,10 @@ if __name__ == "__main__":
 
     from datasets.nerf_st3d import SubjectLoader
 
-    data_root_fp = str(pathlib.Path.home() / "data/st3d")
+    # data_root_fp = str(pathlib.Path.home() / "data/st3d")
+    data_root_fp = "/home/spin/src/github.com/Shopify/magic-media-gen/scripts/trt_builder/debug_code_tmp"
     target_sample_batch_size = 1 << 17
-    grid_resolution = 256
+    grid_resolution = 128
     render_n_samples = 1024
 
     train_dataset = SubjectLoader(
@@ -258,44 +260,46 @@ if __name__ == "__main__":
 
 
     # setup the scene bounding box.
-    if args.unbounded:
-        print("Using unbounded rendering")
-        contraction_type = ContractionType.UN_BOUNDED_SPHERE
-        # contraction_type = ContractionType.UN_BOUNDED_TANH
-        scene_aabb = None
-        near_plane = 0.2
-        far_plane = 1e4
-        render_step_size = 1e-2
-    else:
-        contraction_type = ContractionType.AABB
-        coord = test_dataset.coord.reshape(-1,3)
-        aabb = (coord.min(axis=0)-0.1).tolist() + (coord.max(axis=0)+0.1).tolist()
-        scene_aabb = torch.tensor(aabb, dtype=torch.float32, device=device)
-        near_plane = None
-        far_plane = None
-        render_step_size = (
-            (scene_aabb[3:] - scene_aabb[:3]).max()
-            * math.sqrt(3)
-            / render_n_samples
-        ).item()
+    # if args.unbounded:
+    #     print("Using unbounded rendering")
+    #     contraction_type = ContractionType.UN_BOUNDED_SPHERE
+    #     # contraction_type = ContractionType.UN_BOUNDED_TANH
+    #     scene_aabb = None
+    #     near_plane = 0.2
+    #     far_plane = 1e4
+    #     render_step_size = 1e-2
+    # else:
+    # contraction_type = ContractionType.AABB
+    coord = test_dataset.coord.reshape(-1,3)
+    aabb = (coord.min(axis=0)-0.1).tolist() + (coord.max(axis=0)+0.1).tolist()
+    # scene_aabb = torch.tensor(aabb, dtype=torch.float32, device=device)
+    near_plane = None
+    far_plane = None
+    render_step_size = 5e-3
+    # render_step_size = (
+    #     (scene_aabb[3:] - scene_aabb[:3]).max()
+    #     * math.sqrt(3)
+    #     / render_n_samples
+    # ).item()
+    grid_nlvl = 1
 
     # adding depth prior for occupancy_grid
-    if args.add_depth_prior:
-        occupancy_grid = OccupancyGridWithPrior(
-            roi_aabb=aabb,
-            resolution=grid_resolution,
-            contraction_type=contraction_type,
-        ).to(device)
-        print("updating prior...")
-        occupancy_grid.update_prior_by_point_cloud(
-            test_dataset.coord, render_step_size
-        )
-    else:
-        occupancy_grid = OccupancyGrid(
-            roi_aabb=aabb,
-            resolution=grid_resolution,
-            contraction_type=contraction_type,
-        ).to(device)
+    # if args.add_depth_prior:
+    #     occupancy_grid = OccupancyGridWithPrior(
+    #         roi_aabb=aabb,
+    #         resolution=grid_resolution,
+    #         contraction_type=contraction_type,
+    #     ).to(device)
+    #     print("updating prior...")
+    #     occupancy_grid.update_prior_by_point_cloud(
+    #         test_dataset.coord, render_step_size
+    #     )
+    # else:
+    occupancy_grid = OccGridEstimator(
+        roi_aabb=aabb,
+        resolution=grid_resolution,
+        level=grid_nlvl,
+    ).to(device)
 
     # training
     step = 0
@@ -303,6 +307,8 @@ if __name__ == "__main__":
     for epoch in range(10000000):
         for i in range(len(train_dataset)):
             radiance_field.train()
+            occupancy_grid.train()
+
             data = train_dataset[i]
 
             render_bkgd = data["color_bkgd"]
@@ -310,26 +316,27 @@ if __name__ == "__main__":
             pixels = data["pixels"]
 
             # update occupancy grid
-            occupancy_grid.every_n_step(
+            occupancy_grid.update_every_n_steps(
                 step=step,
                 occ_eval_fn=lambda x: radiance_field.query_opacity(
                     x, render_step_size
                 ),
-                warmup_steps=256,
+                occ_thre=1e-2,
+                # warmup_steps=256,
             )
 
             # render
-            rgb, acc, depth, n_rendering_samples = render_image(
+            rgb, acc, depth, n_rendering_samples = render_image_with_occgrid(
                 radiance_field,
                 occupancy_grid,
                 rays,
-                scene_aabb,
+                # scene_aabb,
                 # rendering options
-                near_plane=near_plane,
-                far_plane=far_plane,
+                # near_plane=near_plane,
+                # far_plane=far_plane,
                 render_step_size=render_step_size,
                 render_bkgd=render_bkgd,
-                cone_angle=args.cone_angle,
+                # cone_angle=args.cone_angle,
             )
             if n_rendering_samples == 0:
                 continue
@@ -393,17 +400,17 @@ if __name__ == "__main__":
                         pixels = data["pixels"]
 
                         # rendering
-                        rgb, acc, depth, _ = render_image(
+                        rgb, acc, depth, _ = render_image_with_occgrid(
                             radiance_field,
                             occupancy_grid,
                             rays,
-                            scene_aabb,
+                            # scene_aabb,
                             # rendering options
-                            near_plane=None,
-                            far_plane=None,
+                            # near_plane=None,
+                            # far_plane=None,
                             render_step_size=render_step_size,
                             render_bkgd=render_bkgd,
-                            cone_angle=args.cone_angle,
+                            # cone_angle=args.cone_angle,
                             # test options
                             test_chunk_size=args.test_chunk_size,
                         )
