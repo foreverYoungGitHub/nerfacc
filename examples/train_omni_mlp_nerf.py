@@ -1,7 +1,3 @@
-"""
-Copyright (c) 2022 Ruilong Li, UC Berkeley.
-"""
-
 import argparse
 import math
 import os
@@ -9,7 +5,8 @@ import time
 import pathlib
 from typing import Callable
 
-import imageio
+# import imageio
+from PIL import Image
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -235,7 +232,7 @@ if __name__ == "__main__":
     from datasets.nerf_st3d import SubjectLoader
 
     # data_root_fp = str(pathlib.Path.home() / "data/st3d")
-    data_root_fp = "/home/spin/src/github.com/Shopify/magic-media-gen/scripts/trt_builder/debug_code_tmp"
+    data_root_fp = "/home/jupyter/data"
     target_sample_batch_size = 1 << 17
     grid_resolution = 128
     render_n_samples = 1024
@@ -419,16 +416,19 @@ if __name__ == "__main__":
                         psnrs.append(psnr.item())
                         depth_error = F.smooth_l1_loss(depth, data["depth"])
                         depth_errors.append(depth_error.item())
-                        imageio.imwrite(
-                            test_dir / "acc_binary_test.png",
-                            ((acc > 0).float().cpu().numpy() * 255).astype(
-                                np.uint8
-                            ),
-                        )
-                        imageio.imwrite(
-                            test_dir / "rgb_test.png",
-                            (rgb.cpu().numpy() * 255).astype(np.uint8),
-                        )
+                        # Image.fromarray(
+                        #     ((acc > 0).float().cpu().numpy() * 255).astype(
+                        #         np.uint8
+                        #     )
+                        # ).save(test_dir / "acc_binary_test.png")
+                        
+                        Image.fromarray(
+                            (rgb.cpu().numpy() * 255).astype(np.uint8)
+                        ).save(test_dir / "rgb_test.png")
+                        # imageio.imwrite(
+                        #     ,
+                        #     ,
+                        # )
                         # break
                 psnr_avg = sum(psnrs) / len(psnrs)
                 depth_error_avg = sum(depth_errors) / len(depth_errors)

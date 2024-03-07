@@ -19,6 +19,8 @@ class SubjectLoader(torch.utils.data.Dataset):
     SPLITS = ["train", "test", "eval"]
     SUBJECT_IDS = [
         "492165",
+        "492165-disney",
+        "492165-japanese",
     ]
 
     # WIDTH, HEIGHT = 1024, 512

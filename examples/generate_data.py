@@ -8,11 +8,11 @@ import imageio as io
 import json
 H, W = 512, 1024
 
-name = '492165'
-baseDir = '/home/spin/src/github.com/Shopify/magic-media-gen/scripts/trt_builder/debug_code_tmp/492165'
+name = '492165-disney'
+baseDir = '/home/jupyter/data/492165-disney'
 
-rgb = np.array(Image.open('/home/spin/src/github.com/Shopify/magic-media-gen/scripts/trt_builder/debug_code_tmp/492165/rgb_rawlight.png'))
-d = np.array(Image.open('/home/spin/src/github.com/Shopify/magic-media-gen/scripts/trt_builder/debug_code_tmp/492165/depth.png'))
+rgb = np.array(Image.open('/home/jupyter/data/492165-disney/rgb_rawlight.png'))
+d = np.array(Image.open('/home/jupyter/data/492165-disney/depth.png'))
 
 d_max = np.max(d)
 d = d / d_max
@@ -142,7 +142,7 @@ def translate(crd, rgb, d, cam=[]):
 
 # test camera pose
 if not os.path.exists(baseDir): os.mkdir(baseDir)
-if not os.path.exists(os.path.join(baseDir, 'rm_occluded')): os.mkdir(os.path.join(baseDir, 'rm_occluded'))
+if not os.path.exists(os.path.join(baseDir, 'train')): os.mkdir(os.path.join(baseDir, 'train'))
 if not os.path.exists(os.path.join(baseDir, 'test')): os.mkdir(os.path.join(baseDir, 'test'))
 io.imsave(os.path.join(baseDir, name + '_rgb.png'), rgb)
 if baseDir.split('/')[-2] == 'mp3d':
@@ -211,7 +211,7 @@ cam_pos = np.concatenate([cam_pos, test_pos, np.array([0.0, 0.0, 0.0]).reshape(1
 images = []
 depth = []
 for n, cam in enumerate(cam_pos):
-    # if n<100: continue
+    if n<100: continue
     img = rgb.copy()
     print("Num ", n)
     tmp_coord = np.concatenate((axis0, axis1, axis2), axis=2)
