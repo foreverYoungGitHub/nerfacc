@@ -36,6 +36,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         near: float = None,
         far: float = None,
         batch_over_images: bool = True,
+        with_mask: bool = True,
     ):
         super().__init__()
         assert split in self.SPLITS, "%s" % split
@@ -47,6 +48,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         self.far = self.FAR if far is None else far
         # self.training = (num_rays is not None) and (split in ["train"])
         self.batch_over_images = batch_over_images
+        self.with_mask = with_mask
         self.device = device
 
         self._load_raw_data()
@@ -62,6 +64,22 @@ class SubjectLoader(torch.utils.data.Dataset):
         num_rays = self.num_rays
 
         if self.split == "eval":
+            indices = np.arange(
+                self.rays_indices[index], self.rays_indices[index + 1]
+            )
+            origins = torch.reshape(
+                torch.from_numpy(self.rays_o[indices]), (self.H, self.W, 3)
+            ).to(self.device)
+            viewdirs = torch.reshape(
+                torch.from_numpy(self.rays_d[indices]), (self.H, self.W, 3)
+            ).to(self.device)
+            rgb = torch.reshape(
+                torch.from_numpy(self.rays_rgb[indices]), (self.H, self.W, 3),
+            ).to(self.device)
+            depth = torch.reshape(
+                torch.from_numpy(self.rays_depth[indices]), (self.H, self.W, 1),
+            ).to(self.device)
+        elif self.split == "test":
             indices = np.arange(
                 self.rays_indices[index], self.rays_indices[index + 1]
             )
@@ -197,23 +215,32 @@ class SubjectLoader(torch.utils.data.Dataset):
                 viewdir = coord - o
                 viewdir = viewdir / np.linalg.norm(viewdir, axis=-1)[..., None]
 
-                # get mask
-                mask = (
-                    np.asarray(
-                        Image.open(
-                            os.path.join(baseDir, self.split, "mask_%d.png" % i)
+                if self.with_mask:
+                    # get mask
+                    mask = (
+                        np.asarray(
+                            Image.open(
+                                os.path.join(baseDir, self.split, "mask_%d.png" % i)
+                            )
                         )
+                        / 255
                     )
-                    / 255
-                )
 
-                indices = (mask > 0).sum()
-                rays_o.append(np.repeat(o.reshape(1, -1), indices, axis=0))
-                rays_g.append(gradient[mask > 0])
-                rays_d.append(viewdir[mask > 0])
-                rays_rgb.append(rgb[mask > 0])
-                rays_depth.append(dep[mask > 0])
-                rays_indices.append(indices)
+                    indices = (mask > 0).sum()
+                    rays_o.append(np.repeat(o.reshape(1, -1), indices, axis=0))
+                    rays_g.append(gradient[mask > 0])
+                    rays_d.append(viewdir[mask > 0])
+                    rays_rgb.append(rgb[mask > 0])
+                    rays_depth.append(dep[mask > 0])
+                    rays_indices.append(indices)
+                else:
+                    indices = H * W
+                    rays_o.append(np.repeat(o.reshape(1, -1), indices, axis=0))
+                    rays_g.append(gradient.reshape(-1, 3))
+                    rays_d.append(viewdir.reshape(-1, 3))
+                    rays_rgb.append(rgb.reshape(-1, 3))
+                    rays_depth.append(dep.reshape(-1, 1))
+                    rays_indices.append(indices)
 
             # get output
             self.rays_o = np.concatenate(rays_o, axis=0).astype(np.float32)
@@ -224,7 +251,7 @@ class SubjectLoader(torch.utils.data.Dataset):
                 np.float32
             )
             self.rays_indices = np.cumsum(rays_indices, dtype=int).astype(
-                np.float32
+                np.uint32
             )
         self.rgb = rgb.astype(np.float32)
         self.coord = coord.astype(np.float32)

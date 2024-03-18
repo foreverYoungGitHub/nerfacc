@@ -200,10 +200,12 @@ if __name__ == "__main__":
     logdir.mkdir(parents=True, exist_ok=True)
 
     # setup the radiance field we want to train.
-    max_steps = 100000
+    max_steps = 40000
     eval_steps = 10000
     grad_scaler = torch.cuda.amp.GradScaler(2**10)
+
     radiance_field = VanillaNeRFRadianceField().to(device)
+    radiance_field.load_state_dict(torch.load("/nerfacc/logs/st3d_gd/492165/test_00100000/model-psnr-28.29633331298828.ckpt"))
     optimizer = torch.optim.Adam(radiance_field.parameters(), lr=5e-4)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
@@ -437,7 +439,13 @@ if __name__ == "__main__":
                 with open(logdir / "statistics.txt", "a") as f:
                     f.write(reprs + "\n")
                 torch.save(
-                    radiance_field.state_dict(),
+                    {
+                        "step": step,
+                        "radiance_field_state_dict": radiance_field.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "scheduler_state_dict": scheduler.state_dict(),
+                        "estimator_state_dict": occupancy_grid.state_dict(),
+                    },
                     test_dir / f"model-psnr-{psnr_avg}.ckpt",
                 )
 
